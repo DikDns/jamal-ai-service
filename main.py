@@ -24,7 +24,7 @@ MAX_LEN = int(os.getenv("MAX_LEN", "50"))
 DEFAULT_THRESHOLD = float(os.getenv("GROUPING_THRESHOLD", "0.3"))
 MARGIN = 1.0
 
-# --- Custom Loss Function (needed for model loading) ---
+# --- Custom Functions (needed for model loading) ---
 
 
 def contrastive_loss(y_true, y_pred):
@@ -32,6 +32,11 @@ def contrastive_loss(y_true, y_pred):
     square_pred = K.square(y_pred)
     margin_square = K.square(K.maximum(MARGIN - y_pred, 0))
     return K.mean(y_true * square_pred + (1 - y_true) * margin_square)
+
+
+def l2_norm(x):
+    """L2 Normalization for embedding vectors."""
+    return K.l2_normalize(x, axis=1)
 
 
 # --- Global variables ---
@@ -51,7 +56,11 @@ async def lifespan(app: FastAPI):
     if os.path.exists(MODEL_PATH):
         model = tf.keras.models.load_model(
             MODEL_PATH,
-            custom_objects={'contrastive_loss': contrastive_loss}
+            custom_objects={
+                'contrastive_loss': contrastive_loss,
+                'l2_norm': l2_norm,
+                'K': K
+            }
         )
         print(f"✅ Model loaded from {MODEL_PATH}")
     else:
