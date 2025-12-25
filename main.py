@@ -103,7 +103,8 @@ def load_tokenizer_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import sys
+    global model, model_loading, model_load_error
+
     print("🚀 Server starting...", flush=True)
     print(f"📁 Model path: {MODEL_PATH}", flush=True)
     print(f"📁 Tokenizer path: {TOKENIZER_PATH}", flush=True)
@@ -116,19 +117,33 @@ async def lifespan(app: FastAPI):
     model_dir = os.path.dirname(MODEL_PATH) or "./model"
     if os.path.exists(model_dir):
         print(f"📂 Files in {model_dir}: {os.listdir(model_dir)}", flush=True)
-    else:
-        print(f"⚠️ Model directory {model_dir} does not exist!", flush=True)
-        # Try listing current directory
-        print(f"📂 Current dir: {os.getcwd()}", flush=True)
-        print(f"📂 Files in current dir: {os.listdir('.')}", flush=True)
 
-    # Load tokenizer immediately (small file)
+    # Load tokenizer
     load_tokenizer_sync()
 
-    # Start model loading in background thread
-    thread = threading.Thread(target=load_model_background, daemon=True)
-    thread.start()
-    print("⏳ Model loading started in background...", flush=True)
+    # Load model synchronously at startup
+    print("🔄 Loading model (this may take a few minutes)...", flush=True)
+    model_loading = True
+    try:
+        if os.path.exists(MODEL_PATH):
+            model = tf.keras.models.load_model(
+                MODEL_PATH,
+                custom_objects={
+                    'contrastive_loss': contrastive_loss,
+                    'l2_norm': l2_norm,
+                    'K': K
+                },
+                compile=False
+            )
+            print(f"✅ Model loaded successfully!", flush=True)
+        else:
+            model_load_error = f"Model not found at {MODEL_PATH}"
+            print(f"❌ {model_load_error}", flush=True)
+    except Exception as e:
+        model_load_error = str(e)
+        print(f"❌ Error loading model: {e}", flush=True)
+    finally:
+        model_loading = False
 
     yield
 
