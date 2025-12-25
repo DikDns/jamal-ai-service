@@ -3,6 +3,7 @@ JAMAL AI Service - Similarity Metric Learning API
 FastAPI microservice for semantic similarity detection.
 """
 
+import threading
 import os
 import pickle
 import numpy as np
@@ -43,22 +44,17 @@ def l2_norm(x):
 model = None
 tokenizer = None
 model_loading = False
+model_load_error = None
 
-# --- Lazy Loading Functions ---
+# --- Background Loading Functions ---
 
 
-def ensure_model_loaded():
-    """Lazy load model on first request."""
-    global model, model_loading
-
-    if model is not None:
-        return True
-
-    if model_loading:
-        return False  # Loading in progress
+def load_model_background():
+    """Load model in background thread."""
+    global model, model_loading, model_load_error
 
     model_loading = True
-    print("🔄 Lazy loading model...")
+    print("🔄 Background loading model...")
 
     try:
         if os.path.exists(MODEL_PATH):
@@ -72,24 +68,21 @@ def ensure_model_loaded():
                 compile=False  # Skip compilation for faster loading
             )
             print(f"✅ Model loaded from {MODEL_PATH}")
-            return True
         else:
-            print(f"⚠️ Model not found at {MODEL_PATH}")
-            return False
+            model_load_error = f"Model not found at {MODEL_PATH}"
+            print(f"⚠️ {model_load_error}")
     except Exception as e:
+        model_load_error = str(e)
         print(f"❌ Error loading model: {e}")
+    finally:
         model_loading = False
-        return False
 
 
-def ensure_tokenizer_loaded():
-    """Lazy load tokenizer on first request."""
+def load_tokenizer_sync():
+    """Load tokenizer synchronously (it's small and fast)."""
     global tokenizer
 
-    if tokenizer is not None:
-        return True
-
-    print("🔄 Lazy loading tokenizer...")
+    print("🔄 Loading tokenizer...")
 
     try:
         if os.path.exists(TOKENIZER_PATH):
@@ -110,10 +103,17 @@ def ensure_tokenizer_loaded():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fast startup - no model loading here
-    print("🚀 Server starting (lazy loading enabled)...")
+    print("🚀 Server starting...")
     print(f"📁 Model path: {MODEL_PATH}")
     print(f"📁 Tokenizer path: {TOKENIZER_PATH}")
+
+    # Load tokenizer immediately (small file)
+    load_tokenizer_sync()
+
+    # Start model loading in background thread
+    thread = threading.Thread(target=load_model_background, daemon=True)
+    thread.start()
+    print("⏳ Model loading started in background...")
 
     yield
 
@@ -171,20 +171,18 @@ class GroupResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
+    model_loading: bool
     tokenizer_loaded: bool
+    error: Optional[str] = None
 
 # --- Helper Functions ---
 
 
 def preprocess_text(texts: List[str]) -> np.ndarray:
     """Convert texts to padded sequences."""
-    # Trigger lazy loading
-    if not ensure_tokenizer_loaded():
-        raise HTTPException(
-            status_code=503, detail="Tokenizer still loading, please retry")
-
     if tokenizer is None:
-        raise HTTPException(status_code=500, detail="Tokenizer not loaded")
+        raise HTTPException(
+            status_code=503, detail="Tokenizer not loaded yet, please retry")
 
     sequences = tokenizer.texts_to_sequences(texts)
     padded = pad_sequences(sequences, maxlen=MAX_LEN, padding='post')
@@ -193,13 +191,13 @@ def preprocess_text(texts: List[str]) -> np.ndarray:
 
 def compute_distance(text1: str, text2: str) -> float:
     """Compute distance between two texts."""
-    # Trigger lazy loading
-    if not ensure_model_loaded():
+    if model_loading:
         raise HTTPException(
-            status_code=503, detail="Model still loading, please retry in a few minutes")
+            status_code=503, detail="Model still loading in background, please retry in a few minutes")
 
     if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+        error_msg = f"Model not loaded. Error: {model_load_error}" if model_load_error else "Model not loaded"
+        raise HTTPException(status_code=500, detail=error_msg)
 
     pad1 = preprocess_text([text1])
     pad2 = preprocess_text([text2])
@@ -210,13 +208,13 @@ def compute_distance(text1: str, text2: str) -> float:
 
 def compute_pairwise_distances(ideas: List[str]) -> np.ndarray:
     """Compute pairwise distance matrix."""
-    # Trigger lazy loading
-    if not ensure_model_loaded():
+    if model_loading:
         raise HTTPException(
-            status_code=503, detail="Model still loading, please retry in a few minutes")
+            status_code=503, detail="Model still loading in background, please retry in a few minutes")
 
     if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+        error_msg = f"Model not loaded. Error: {model_load_error}" if model_load_error else "Model not loaded"
+        raise HTTPException(status_code=500, detail=error_msg)
 
     n = len(ideas)
     padded = preprocess_text(ideas)
@@ -283,9 +281,11 @@ def find_groups(ideas: List[str], distance_matrix: np.ndarray, threshold: float)
 async def health_check():
     """Health check endpoint."""
     return HealthResponse(
-        status="ok",
+        status="ok" if not model_load_error else "error",
         model_loaded=model is not None,
-        tokenizer_loaded=tokenizer is not None
+        model_loading=model_loading,
+        tokenizer_loaded=tokenizer is not None,
+        error=model_load_error
     )
 
 
