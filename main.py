@@ -42,37 +42,78 @@ def l2_norm(x):
 # --- Global variables ---
 model = None
 tokenizer = None
+model_loading = False
+
+# --- Lazy Loading Functions ---
+
+
+def ensure_model_loaded():
+    """Lazy load model on first request."""
+    global model, model_loading
+
+    if model is not None:
+        return True
+
+    if model_loading:
+        return False  # Loading in progress
+
+    model_loading = True
+    print("🔄 Lazy loading model...")
+
+    try:
+        if os.path.exists(MODEL_PATH):
+            model = tf.keras.models.load_model(
+                MODEL_PATH,
+                custom_objects={
+                    'contrastive_loss': contrastive_loss,
+                    'l2_norm': l2_norm,
+                    'K': K
+                },
+                compile=False  # Skip compilation for faster loading
+            )
+            print(f"✅ Model loaded from {MODEL_PATH}")
+            return True
+        else:
+            print(f"⚠️ Model not found at {MODEL_PATH}")
+            return False
+    except Exception as e:
+        print(f"❌ Error loading model: {e}")
+        model_loading = False
+        return False
+
+
+def ensure_tokenizer_loaded():
+    """Lazy load tokenizer on first request."""
+    global tokenizer
+
+    if tokenizer is not None:
+        return True
+
+    print("🔄 Lazy loading tokenizer...")
+
+    try:
+        if os.path.exists(TOKENIZER_PATH):
+            with open(TOKENIZER_PATH, 'rb') as f:
+                tokenizer = pickle.load(f)
+            print(f"✅ Tokenizer loaded from {TOKENIZER_PATH}")
+            return True
+        else:
+            print(f"⚠️ Tokenizer not found at {TOKENIZER_PATH}")
+            return False
+    except Exception as e:
+        print(f"❌ Error loading tokenizer: {e}")
+        return False
+
 
 # --- Lifespan (startup/shutdown) ---
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, tokenizer
-
-    print("🔄 Loading model and tokenizer...")
-
-    # Load model
-    if os.path.exists(MODEL_PATH):
-        model = tf.keras.models.load_model(
-            MODEL_PATH,
-            custom_objects={
-                'contrastive_loss': contrastive_loss,
-                'l2_norm': l2_norm,
-                'K': K
-            }
-        )
-        print(f"✅ Model loaded from {MODEL_PATH}")
-    else:
-        print(f"⚠️ Model not found at {MODEL_PATH}")
-
-    # Load tokenizer
-    if os.path.exists(TOKENIZER_PATH):
-        with open(TOKENIZER_PATH, 'rb') as f:
-            tokenizer = pickle.load(f)
-        print(f"✅ Tokenizer loaded from {TOKENIZER_PATH}")
-    else:
-        print(f"⚠️ Tokenizer not found at {TOKENIZER_PATH}")
+    # Fast startup - no model loading here
+    print("🚀 Server starting (lazy loading enabled)...")
+    print(f"📁 Model path: {MODEL_PATH}")
+    print(f"📁 Tokenizer path: {TOKENIZER_PATH}")
 
     yield
 
@@ -137,6 +178,11 @@ class HealthResponse(BaseModel):
 
 def preprocess_text(texts: List[str]) -> np.ndarray:
     """Convert texts to padded sequences."""
+    # Trigger lazy loading
+    if not ensure_tokenizer_loaded():
+        raise HTTPException(
+            status_code=503, detail="Tokenizer still loading, please retry")
+
     if tokenizer is None:
         raise HTTPException(status_code=500, detail="Tokenizer not loaded")
 
@@ -147,6 +193,11 @@ def preprocess_text(texts: List[str]) -> np.ndarray:
 
 def compute_distance(text1: str, text2: str) -> float:
     """Compute distance between two texts."""
+    # Trigger lazy loading
+    if not ensure_model_loaded():
+        raise HTTPException(
+            status_code=503, detail="Model still loading, please retry in a few minutes")
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
 
@@ -159,6 +210,11 @@ def compute_distance(text1: str, text2: str) -> float:
 
 def compute_pairwise_distances(ideas: List[str]) -> np.ndarray:
     """Compute pairwise distance matrix."""
+    # Trigger lazy loading
+    if not ensure_model_loaded():
+        raise HTTPException(
+            status_code=503, detail="Model still loading, please retry in a few minutes")
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
 
