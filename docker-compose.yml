@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # NestJS Backend (existing)
+  jamal-be:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    depends_on:
+      - jamal-ai
+    restart: unless-stopped
+
+  # AI Service (new)
+  jamal-ai:
+    build:
+      context: ./src/ai-service
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    environment:
+      - MODEL_PATH=/app/model/jamal_metric_learning.h5
+      - TOKENIZER_PATH=/app/model/tokenizer.pkl
+      - GROUPING_THRESHOLD=0.3
+      - MAX_LEN=50
+    volumes:
+      # Mount model files from host
+      - ./src/ai-service/model:/app/model:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
