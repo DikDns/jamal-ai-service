@@ -103,9 +103,24 @@ def load_tokenizer_sync():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Server starting...")
-    print(f"📁 Model path: {MODEL_PATH}")
-    print(f"📁 Tokenizer path: {TOKENIZER_PATH}")
+    import sys
+    print("🚀 Server starting...", flush=True)
+    print(f"📁 Model path: {MODEL_PATH}", flush=True)
+    print(f"📁 Tokenizer path: {TOKENIZER_PATH}", flush=True)
+
+    # Debug: Check if files exist
+    print(f"📂 Model exists: {os.path.exists(MODEL_PATH)}", flush=True)
+    print(f"📂 Tokenizer exists: {os.path.exists(TOKENIZER_PATH)}", flush=True)
+
+    # List model directory
+    model_dir = os.path.dirname(MODEL_PATH) or "./model"
+    if os.path.exists(model_dir):
+        print(f"📂 Files in {model_dir}: {os.listdir(model_dir)}", flush=True)
+    else:
+        print(f"⚠️ Model directory {model_dir} does not exist!", flush=True)
+        # Try listing current directory
+        print(f"📂 Current dir: {os.getcwd()}", flush=True)
+        print(f"📂 Files in current dir: {os.listdir('.')}", flush=True)
 
     # Load tokenizer immediately (small file)
     load_tokenizer_sync()
@@ -113,11 +128,11 @@ async def lifespan(app: FastAPI):
     # Start model loading in background thread
     thread = threading.Thread(target=load_model_background, daemon=True)
     thread.start()
-    print("⏳ Model loading started in background...")
+    print("⏳ Model loading started in background...", flush=True)
 
     yield
 
-    print("👋 Shutting down...")
+    print("👋 Shutting down...", flush=True)
 
 # --- FastAPI App ---
 app = FastAPI(
@@ -287,6 +302,26 @@ async def health_check():
         tokenizer_loaded=tokenizer is not None,
         error=model_load_error
     )
+
+
+@app.get("/debug")
+async def debug_info():
+    """Debug endpoint to check file system."""
+    model_dir = os.path.dirname(MODEL_PATH) or "./model"
+    return {
+        "cwd": os.getcwd(),
+        "model_path": MODEL_PATH,
+        "tokenizer_path": TOKENIZER_PATH,
+        "model_exists": os.path.exists(MODEL_PATH),
+        "tokenizer_exists": os.path.exists(TOKENIZER_PATH),
+        "model_dir_exists": os.path.exists(model_dir),
+        "model_dir_contents": os.listdir(model_dir) if os.path.exists(model_dir) else [],
+        "cwd_contents": os.listdir("."),
+        "model_loading": model_loading,
+        "model_loaded": model is not None,
+        "tokenizer_loaded": tokenizer is not None,
+        "error": model_load_error
+    }
 
 
 @app.post("/similarity", response_model=SimilarityResponse)
